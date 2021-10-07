@@ -177,6 +177,7 @@ typedef enum {
     LSTM,
     CONV_LSTM,
     HISTORY,
+    TRANSFORMER,
     CRNN,
     BATCHNORM,
     NETWORK,

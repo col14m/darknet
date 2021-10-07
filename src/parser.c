@@ -21,6 +21,7 @@
 #include "local_layer.h"
 #include "lstm_layer.h"
 #include "conv_lstm_layer.h"
+#include "transformer_layer.h"
 #include "maxpool_layer.h"
 #include "normalization_layer.h"
 #include "option_list.h"
@@ -74,6 +75,7 @@ LAYER_TYPE string_to_layer_type(char * type)
     if (strcmp(type, "[gru]")==0) return GRU;
     if (strcmp(type, "[lstm]")==0) return LSTM;
     if (strcmp(type, "[conv_lstm]") == 0) return CONV_LSTM;
+    if (strcmp(type, "[transformer]") == 0) return TRANSFORMER;
     if (strcmp(type, "[history]") == 0) return HISTORY;
     if (strcmp(type, "[rnn]")==0) return RNN;
     if (strcmp(type, "[conn]")==0
@@ -347,6 +349,14 @@ layer parse_history(list *options, size_params params)
     layer l = make_history_layer(params.batch, params.h, params.w, params.c, history_size, params.time_steps, params.train);
     return l;
 }
+
+layer parse_transformer(list *options, size_params params)
+{
+    int history_size = option_find_int(options, "history_size", 4);
+    layer l = make_transformer_layer(params.batch, params.h, params.w, params.c, history_size, params.time_steps, params.train);
+    return l;
+}
+
 
 connected_layer parse_connected(list *options, size_params params)
 {
@@ -1455,6 +1465,8 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
             l = parse_lstm(options, params);
         }else if (lt == CONV_LSTM) {
             l = parse_conv_lstm(options, params);
+        }else if (lt == TRANSFORMER) {
+            l = parse_transformer(options, params);
         }else if (lt == HISTORY) {
             l = parse_history(options, params);
         }else if(lt == CRNN){
@@ -2069,6 +2081,8 @@ void save_weights_upto(network net, char *filename, int cutoff, int save_ema)
             save_convolutional_weights(*(l.ui), fp);
             save_convolutional_weights(*(l.ug), fp);
             save_convolutional_weights(*(l.uo), fp);
+        } if (l.type == TRANSFORMER) {
+
         } if(l.type == CRNN){
             save_convolutional_weights(*(l.input_layer), fp);
             save_convolutional_weights(*(l.self_layer), fp);
