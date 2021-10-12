@@ -63,37 +63,34 @@ layer make_transformer_layer(int batch, int h, int w, int c, int history_size, i
 
 void forward_transformer_layer(layer l, network_state state)
 {
-    if (l.steps == 1) {
-        copy_cpu(l.inputs*l.batch, state.input, 1, l.output, 1);
-        return;
-    }
 
-    const int batch = l.batch / l.steps;
+    float* k = (float*)xcalloc(1, sizeof(layer));
 
-    float *prev_output = l.prev_state_cpu;
+    const int batch = l.batch;
+    const int ts = l.steps;
+    const int c = l.c;
+    const int h = l.h;
+    const int w = l.w;
+    const int heads = 4;
 
-    int i;
-    for (i = 0; i < l.steps; ++i) {
-        // shift cell
-        int shift_size = l.inputs * (l.history_size - 1);
-        int output_sift = l.inputs;
+    const int c_period = c / heads;
+    const int num_c_for_each_array = c_period / 3; //for k, q, v
 
-        int b;
-        for (b = 0; b < batch; ++b) {
-            int input_start = b*l.inputs + i*l.inputs*batch;
-            int output_start = b*l.outputs + i*l.outputs*batch;
-            float *input = state.input + input_start;
-            float *output = l.output + output_start;
+    int idx_k = 0;
+    for (int b = 0; b < batch; b++) {
+        for (int i = 0; i < num_c_for_each_array * w * h; i++) {
+            for (int head = 0; head < heads; head++) {
+                k[idx_k] = state.input[b * c * h * w  + head * c_period * w * h + i];
+                idx_k++;
 
-            copy_cpu(shift_size, prev_output + b*l.outputs, 1, output + output_sift, 1);
+            }
 
-            copy_cpu(l.inputs, input, 1, output, 1);
         }
-        prev_output = l.output + i*l.outputs*batch;
+
     }
 
-    int output_start = (l.steps-1)*l.outputs*batch;
-    copy_cpu(batch*l.outputs, l.output + output_start, 1, l.prev_state_cpu, 1);
+    // [b,c,h,w] -> 3 x [b, heads, hw, c/(3*heads)]
+
 }
 
 void backward_transformer_layer(layer l, network_state state)

@@ -5,6 +5,7 @@
 #include "conv_lstm_layer.h"
 #include "connected_layer.h"
 #include "convolutional_layer.h"
+#include "transformer_layer.h"
 #include "utils.h"
 #include "dark_cuda.h"
 #include "blas.h"
@@ -638,6 +639,8 @@ void restore_state_conv_lstm(layer l)
 
 void forward_conv_lstm_layer(layer l, network_state state)
 {
+    // forward_transformer_layer(l, state);
+
     network_state s = { 0 };
     s.train = state.train;
     s.workspace = state.workspace;
