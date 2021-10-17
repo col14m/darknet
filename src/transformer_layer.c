@@ -61,27 +61,25 @@ layer make_transformer_layer(int batch, int h, int w, int c, int history_size, i
     return l;
 }
 
-void forward_transformer_layer(layer l, network_state state)
+float * create_target_vector(layer l, network_state state, int start_idx)
 {
-
-    float* k = (float*)xcalloc(1, sizeof(layer));
-
-    const int batch = l.batch;
-    const int ts = l.steps;
+    const int batch = l.batch * l.steps;
     const int c = l.c;
     const int h = l.h;
     const int w = l.w;
     const int heads = 4;
 
-    const int c_period = c / heads;
-    const int num_c_for_each_array = c_period / 3; //for k, q, v
+    const int num_c_for_each_head = c / heads;
+    const int num_c_for_each_vector = num_c_for_each_head / 3; //for k, q, v
 
-    int idx_k = 0;
+    float* target_vector = (float*) xcalloc(sizeof(float), h * w * c * batch / 3);
+
+    int idx_target_vector = 0;
     for (int b = 0; b < batch; b++) {
-        for (int i = 0; i < num_c_for_each_array * w * h; i++) {
+        for (int i = 0; i < num_c_for_each_vector * w * h; i++) {
             for (int head = 0; head < heads; head++) {
-                k[idx_k] = state.input[b * c * h * w  + head * c_period * w * h + i];
-                idx_k++;
+                target_vector[idx_target_vector] = state.input[b * c * h * w  + head * num_c_for_each_head * w * h + start_idx + i];
+                idx_target_vector++;
 
             }
 
@@ -89,117 +87,47 @@ void forward_transformer_layer(layer l, network_state state)
 
     }
 
-    // [b,c,h,w] -> 3 x [b, heads, hw, c/(3*heads)]
+    return target_vector;
 
 }
 
+void forward_transformer_layer(layer l, network_state state)
+{
+    const int batch = l.batch * l.steps;
+    const int c = l.c;
+    const int h = l.h;
+    const int w = l.w;
+    const int heads = 4;
+
+    const int num_c_for_each_head = c / heads;
+    const int num_c_for_each_vector = num_c_for_each_head / 3; //for k, v, q
+
+    // [b,c,h,w] -> 3 x [b, heads, hw, c/(3*heads)]
+
+    float * k_vector = create_target_vector(l, state, 0);
+    float * v_vector = create_target_vector(l, state, num_c_for_each_vector * h * w);
+    float * q_vector = create_target_vector(l, state, 2 * num_c_for_each_vector * h * w);
+
+    // attn = q x kt
+    gemm(0, 1, )
+
+}
+
+
+
 void backward_transformer_layer(layer l, network_state state)
 {
-    if (l.steps == 1) {
-        axpy_cpu(l.inputs*l.batch, 1, l.delta, 1, state.delta, 1);
-        return;
-    }
 
-    const int batch = l.batch / l.steps;
-
-    // l.delta -> state.delta
-    int i;
-    for (i = 0; i < l.steps; ++i) {
-        int b;
-        for (b = 0; b < batch; ++b) {
-            int input_start = b*l.inputs + i*l.inputs*batch;
-            int output_start = b*l.outputs + i*l.outputs*batch;
-            float *state_delta = state.delta + input_start;
-            float *l_delta = l.delta + output_start;
-
-            //copy_cpu(l.inputs, l_delta, 1, state_delta, 1);
-            axpy_cpu(l.inputs, 1, l_delta, 1, state_delta, 1);
-        }
-    }
 }
 
 #ifdef GPU
 void forward_transformer_layer_gpu(const layer l, network_state state)
 {
-    if (l.steps == 1) {
-        simple_copy_ongpu(l.inputs*l.batch, state.input, l.output_gpu);
-        return;
-    }
 
-    const int batch = l.batch / l.steps;
-
-    //int copy_size = l.inputs*batch*l.steps;
-    //printf(" copy_size = %d, inputs = %d, batch = %d, steps = %d, l.history_size = %d \n", copy_size, l.inputs, batch, l.steps, l.history_size);
-    //simple_copy_ongpu(copy_size, state.input, l.output_gpu);
-    //return;
-
-    //fill_ongpu(batch*l.outputs, 0, l.prev_state_gpu, 1);
-    float *prev_output = l.prev_state_gpu;
-
-    int i;
-    for (i = 0; i < l.steps; ++i) {
-        // shift cell
-        int shift_size = l.inputs * (l.history_size - 1);
-        int output_sift = l.inputs;
-
-        int b;
-        for (b = 0; b < batch; ++b) {
-            //printf(" hist-fw: i = %d, b = %d \n", i, b);
-
-            int input_start = b*l.inputs + i*l.inputs*batch;
-            int output_start = b*l.outputs + i*l.outputs*batch;
-            float *input = state.input + input_start;
-            float *output = l.output_gpu + output_start;
-
-            //copy_cpu(shift_size, prev_output + b*l.outputs, 1, output + output_sift, 1);
-            simple_copy_ongpu(shift_size, prev_output + b*l.outputs, output + output_sift);
-
-            //copy_cpu(l.inputs, input, 1, output, 1);
-            simple_copy_ongpu(l.inputs, input, output);
-
-            int h;
-            for (h = 1; h < l.history_size; ++h) {
-                //scal_ongpu(l.inputs, (l.history_size - h)/ (float)l.history_size, output + h*l.inputs, 1);
-                //scal_ongpu(l.inputs, 0, output + h*l.inputs, 1);
-            }
-        }
-        prev_output = l.output_gpu + i*l.outputs*batch;
-    }
-
-    int output_start = (l.steps - 1)*l.outputs*batch;
-    //copy_cpu(batch*l.outputs, l.output + output_start, 1, l.prev_state_cpu, 1);
-    simple_copy_ongpu(batch*l.outputs, l.output_gpu + output_start, l.prev_state_gpu);
 }
 
 void backward_transformer_layer_gpu(const layer l, network_state state)
 {
-    if (l.steps == 1) {
-        axpy_ongpu(l.inputs*l.batch, 1, l.delta_gpu, 1, state.delta, 1);
-        return;
-    }
 
-    const int batch = l.batch / l.steps;
-
-    //int copy_size = l.inputs*batch*l.steps;
-    //printf(" copy_size = %d, inputs = %d, batch = %d, steps = %d, l.history_size = %d \n", copy_size, l.inputs, batch, l.steps, l.history_size);
-    //axpy_ongpu(copy_size, 1, l.delta_gpu, 1, state.delta, 1);
-    //return;
-
-    // l.delta -> state.delta
-    int i;
-    for (i = 0; i < l.steps; ++i) {
-        int b;
-        for (b = 0; b < batch; ++b) {
-            //printf(" hist-bw: i = %d, b = %d \n", i, b);
-
-            int input_start = b*l.inputs + i*l.inputs*batch;
-            int output_start = b*l.outputs + i*l.outputs*batch;
-            float *state_delta = state.delta + input_start;
-            float *l_delta = l.delta_gpu + output_start;
-
-            //copy_cpu(l.inputs, l_delta, 1, state_delta, 1);
-            axpy_ongpu(l.inputs, 1, l_delta, 1, state_delta, 1);
-        }
-    }
 }
 #endif

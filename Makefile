@@ -15,7 +15,7 @@ ZED_CAMERA_v2_8=0
 # set ZED_CAMERA_v2_8=1 to enable ZED SDK 2.X
 
 USE_CPP=0
-DEBUG=0
+DEBUG=1
 
 ARCH= -gencode arch=compute_35,code=sm_35 \
       -gencode arch=compute_50,code=[sm_50,compute_50] \

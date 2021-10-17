@@ -1,4 +1,5 @@
 #include "convolutional_layer.h"
+#include "transformer_layer.h"
 #include "utils.h"
 #include "batchnorm_layer.h"
 #include "im2col.h"
@@ -1210,6 +1211,8 @@ size_t binary_transpose_align_input(int k, int n, float *b, char **t_bit_input, 
 
 void forward_convolutional_layer(convolutional_layer l, network_state state)
 {
+    forward_transformer_layer(l, state);
+
     int out_h = convolutional_out_height(l);
     int out_w = convolutional_out_width(l);
     int i, j;
