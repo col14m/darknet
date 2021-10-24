@@ -855,11 +855,8 @@ struct detection_t : detection {
     }
 };
 
-
-void match(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets_num, float thresh, float sim_thresh, float track_ciou_norm) {
-
-    float large_const =
-      (2 * (old_dets.size() + new_dets_num));
+std::vector<std::vector<float>> create_cost_matrix(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets_num, float thresh, float sim_thresh, float track_ciou_norm) {
+    const float large_const = (2 * (old_dets.size() + new_dets_num));
     std::vector<std::vector<float>> cost_matrix;
 
     for (int old_id = 0; old_id < old_dets.size(); ++old_id) {
@@ -869,7 +866,6 @@ void match(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets
             float cosine_sim = cosine_similarity(new_dets[new_id].embeddings, old_dets[old_id].embeddings, old_dets[0].embedding_size);
             float iou = box_iou(new_dets[new_id].bbox, old_dets[old_id].bbox);
             float general_sim = cosine_sim * (1 - track_ciou_norm) + iou * track_ciou_norm;
-
             if (check_classes_id(new_dets[new_id], old_dets[old_id], thresh) && general_sim > sim_thresh) {
                 distance = 1 - general_sim;
             }
@@ -880,16 +876,24 @@ void match(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets
         }
         cost_matrix.push_back(row_sim);
     }
+    return cost_matrix;
 
+}
+
+void match(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets_num, float thresh, float sim_thresh, float track_ciou_norm) {
+    // hungarian algorithm
+    auto cost_matrix = create_cost_matrix(old_dets, new_dets, new_dets_num, thresh, sim_thresh, track_ciou_norm);
     HungarianAlgorithm LAPSolver;
     std::vector<int> assignment;
     LAPSolver.Solve(cost_matrix, assignment);
 
+    // set track_id for new dets
     for (int old_id = 0; old_id < old_dets.size(); ++old_id) {
-        if (assignment[old_id] >= 0 && cost_matrix[old_id][assignment[old_id]] < 1) {
-            new_dets[assignment[old_id]].sim = cost_matrix[old_id][assignment[old_id]];
-            new_dets[assignment[old_id]].track_id =  old_dets[old_id].track_id;
-            new_dets[assignment[old_id]].sort_class = old_dets[old_id].sort_class + 1;
+        int best_new_detection_idx = assignment[old_id];
+        if (best_new_detection_idx >= 0 && cost_matrix[old_id][best_new_detection_idx] < 1) {
+            new_dets[best_new_detection_idx].sim = cost_matrix[old_id][best_new_detection_idx];
+            new_dets[best_new_detection_idx].track_id =  old_dets[old_id].track_id;
+            new_dets[best_new_detection_idx].sort_class = old_dets[old_id].sort_class + 1;
         }
     }
 }
@@ -908,7 +912,7 @@ void set_track_id(detection *new_dets, int new_dets_num, float thresh, float sim
         }
     }
 
-    // match
+    // match using hungarian algorithm
     if (old_dets.size() != 0) {
         match(old_dets, new_dets, new_dets_num, thresh, sim_thresh, track_ciou_norm);
     }
