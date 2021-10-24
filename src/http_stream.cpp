@@ -1,6 +1,7 @@
 #define _XOPEN_SOURCE
 #include "image.h"
 #include "http_stream.h"
+#include "hungarian.h"
 
 //
 // a single-threaded, multi client(using select), debug webserver - streaming out mjpg.
@@ -855,6 +856,44 @@ struct detection_t : detection {
 };
 
 
+void match(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets_num, float thresh, float sim_thresh, float track_ciou_norm) {
+
+    float large_const =
+      (2 * (old_dets.size() + new_dets_num));
+    std::vector<std::vector<float>> cost_matrix;
+
+    for (int old_id = 0; old_id < old_dets.size(); ++old_id) {
+        std::vector<float> row_sim;
+        for (int new_id = 0; new_id < new_dets_num; ++new_id) {
+            float distance = 0;
+            float cosine_sim = cosine_similarity(new_dets[new_id].embeddings, old_dets[old_id].embeddings, old_dets[0].embedding_size);
+            float iou = box_iou(new_dets[new_id].bbox, old_dets[old_id].bbox);
+            float general_sim = cosine_sim * (1 - track_ciou_norm) + iou * track_ciou_norm;
+
+            if (check_classes_id(new_dets[new_id], old_dets[old_id], thresh) && general_sim > sim_thresh) {
+                distance = 1 - general_sim;
+            }
+            else {
+                distance = large_const;
+            }
+            row_sim.push_back(distance);
+        }
+        cost_matrix.push_back(row_sim);
+    }
+
+    HungarianAlgorithm LAPSolver;
+    std::vector<int> assignment;
+    LAPSolver.Solve(cost_matrix, assignment);
+
+    for (int old_id = 0; old_id < old_dets.size(); ++old_id) {
+        if (assignment[old_id] >= 0 && cost_matrix[old_id][assignment[old_id]] < 1) {
+            new_dets[assignment[old_id]].sim = cost_matrix[old_id][assignment[old_id]];
+            new_dets[assignment[old_id]].track_id =  old_dets[old_id].track_id;
+            new_dets[assignment[old_id]].sort_class = old_dets[old_id].sort_class + 1;
+        }
+    }
+}
+
 
 void set_track_id(detection *new_dets, int new_dets_num, float thresh, float sim_thresh, float track_ciou_norm, int deque_size, int dets_for_track, int dets_for_show)
 {
@@ -869,48 +908,9 @@ void set_track_id(detection *new_dets, int new_dets_num, float thresh, float sim
         }
     }
 
-    std::vector<similarity_detections_t> sim_det(old_dets.size() * new_dets_num);
-
-    // calculate similarity
-    for (int old_id = 0; old_id < old_dets.size(); ++old_id) {
-        for (int new_id = 0; new_id < new_dets_num; ++new_id) {
-            const int index = old_id*new_dets_num + new_id;
-            const float sim = cosine_similarity(new_dets[new_id].embeddings, old_dets[old_id].embeddings, old_dets[0].embedding_size);
-            sim_det[index].new_id = new_id;
-            sim_det[index].old_id = old_id;
-            sim_det[index].sim = sim;
-        }
-    }
-
-    // sort similarity
-    std::sort(sim_det.begin(), sim_det.end(), [](similarity_detections_t v1, similarity_detections_t v2) { return v1.sim > v2.sim; });
-    //if(sim_det.size() > 0) printf(" sim_det_first = %f, sim_det_end = %f \n", sim_det.begin()->sim, sim_det.rbegin()->sim);
-
-    std::vector<int> new_idx(new_dets_num, 1);
-    std::vector<int> old_idx(old_dets.size(), 1);
-    std::vector<int> track_idx(new_track_id, 1);
-
-    // match objects
-    for (int index = 0; index < new_dets_num*old_dets.size(); ++index) {
-        const int new_id = sim_det[index].new_id;
-        const int old_id = sim_det[index].old_id;
-        const int track_id = old_dets[old_id].track_id;
-        const int det_count = old_dets[old_id].sort_class;
-        //printf(" ciou = %f \n", box_ciou(new_dets[new_id].bbox, old_dets[old_id].bbox));
-        if (track_idx[track_id] && new_idx[new_id] && old_idx[old_id] && check_classes_id(new_dets[new_id], old_dets[old_id], thresh)) {
-            float sim = sim_det[index].sim;
-            //float ciou = box_ciou(new_dets[new_id].bbox, old_dets[old_id].bbox);
-            float ciou = box_iou(new_dets[new_id].bbox, old_dets[old_id].bbox);
-            sim = sim * (1 - track_ciou_norm) + ciou * track_ciou_norm;
-            if (sim_thresh < sim && new_dets[new_id].sim < sim) {
-                new_dets[new_id].sim = sim;
-                new_dets[new_id].track_id = track_id;
-                new_dets[new_id].sort_class = det_count + 1;
-                //new_idx[new_id] = 0;
-                old_idx[old_id] = 0;
-                if(track_id) track_idx[track_id] = 0;
-            }
-        }
+    // match
+    if (old_dets.size() != 0) {
+        match(old_dets, new_dets, new_dets_num, thresh, sim_thresh, track_ciou_norm);
     }
 
     // set new track_id
