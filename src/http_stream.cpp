@@ -811,20 +811,6 @@ int check_classes_id(detection det1, detection det2, float thresh)
     return 0;
 }
 
-int fill_remaining_id(detection *new_dets, int new_dets_num, int new_track_id, float thresh, int detection_count)
-{
-    for (int i = 0; i < new_dets_num; ++i) {
-        if (new_dets[i].track_id == 0 && check_prob(new_dets[i], thresh)) {
-            //printf(" old_tid = %d, new_tid = %d, sim = %f \n", new_dets[i].track_id, new_track_id, new_dets[i].sim);
-            if (new_dets[i].sort_class > detection_count) {
-                new_dets[i].track_id = new_track_id;
-                new_track_id++;
-            }
-        }
-    }
-    return new_track_id;
-}
-
 float *make_float_array(float* src, size_t size)
 {
     float *dst = (float*)xcalloc(size, sizeof(float));
@@ -854,6 +840,12 @@ struct detection_t : detection {
         if (uc) free(uc);
     }
 };
+
+struct track_t {
+    std::vector <detection_t> detections;
+    int track_id;
+};
+typedef struct track_t track_t;
 
 std::vector<std::vector<float>> create_cost_matrix(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets_num, float thresh, float sim_thresh, float track_ciou_norm) {
     const float large_const = (2 * (old_dets.size() + new_dets_num));
@@ -890,55 +882,74 @@ void match(std::vector<detection_t> &old_dets, detection *new_dets, int new_dets
     // set track_id for new dets
     for (int old_id = 0; old_id < old_dets.size(); ++old_id) {
         int best_new_detection_idx = assignment[old_id];
-        if (best_new_detection_idx >= 0 && cost_matrix[old_id][best_new_detection_idx] < 1) {
-            new_dets[best_new_detection_idx].sim = cost_matrix[old_id][best_new_detection_idx];
+        if (best_new_detection_idx >= 0 && cost_matrix[old_id][best_new_detection_idx] <= 1) {
+            new_dets[best_new_detection_idx].sim = 1 - cost_matrix[old_id][best_new_detection_idx];
             new_dets[best_new_detection_idx].track_id =  old_dets[old_id].track_id;
-            new_dets[best_new_detection_idx].sort_class = old_dets[old_id].sort_class + 1;
         }
     }
 }
 
+int add_new_detection_to_track(std::vector <track_t> &tracks, const detection &new_det) {
+    for (auto &track: tracks) {
+        if (track.track_id == new_det.track_id) {
+            track.detections.push_back(new_det);
+            return 1;
+        }
+    }
+    return 0;
+
+}
+
+void create_new_track(std::vector <track_t> &tracks, int &new_track_id, detection &new_det) {
+    track_t track;
+    new_det.track_id = new_track_id;
+    track.detections.push_back(new_det);
+    track.track_id = new_track_id;
+    tracks.push_back(track);
+    new_track_id++;
+
+}
+
+void create_new_track_or_del_detection(std::vector <track_t> &tracks, int &new_track_id, detection &new_det, float thresh) {
+    if (check_prob(new_det, thresh)) {
+        create_new_track(tracks, new_track_id, new_det);
+    }
+    else {
+        for (int j = 0; j < new_det.classes; ++j) {
+            new_det.prob[j] = 0;
+        }
+    }
+}
 
 void set_track_id(detection *new_dets, int new_dets_num, float thresh, float sim_thresh, float track_ciou_norm, int deque_size, int dets_for_track, int dets_for_show)
 {
     static int new_track_id = 1;
-    static std::deque<std::vector<detection_t>> old_dets_dq;
+    static std::vector <track_t> tracks;
 
-    // copy detections from queue of vectors to the one vector
+    if (tracks.size() == 0) {
+        for (int new_idx = 0; new_idx < new_dets_num; ++new_idx) {
+            create_new_track_or_del_detection(tracks, new_track_id, new_dets[new_idx], thresh);
+        }
+        return;
+    }
+
     std::vector<detection_t> old_dets;
-    for (std::vector<detection_t> &v : old_dets_dq) {
-        for (int i = 0; i < v.size(); ++i) {
-            old_dets.push_back(v[i]);
-        }
+    for (const auto &track: tracks) {
+        old_dets.push_back(track.detections.back());
     }
 
-    // match using hungarian algorithm
-    if (old_dets.size() != 0) {
-        match(old_dets, new_dets, new_dets_num, thresh, sim_thresh, track_ciou_norm);
-    }
+    match(old_dets, new_dets, new_dets_num, thresh, sim_thresh, track_ciou_norm);
 
-    // set new track_id
-    new_track_id = fill_remaining_id(new_dets, new_dets_num, new_track_id, thresh, dets_for_track);
-
-    // store new_detections to the queue of vectors
-    std::vector<detection_t> new_det_vec;
-    for (int i = 0; i < new_dets_num; ++i) {
-        if (check_prob(new_dets[i], thresh)) {
-            new_det_vec.push_back(new_dets[i]);
-        }
-    }
-
-    // add new
-    old_dets_dq.push_back(new_det_vec);
-    // remove old
-    if (old_dets_dq.size() > deque_size) old_dets_dq.pop_front();
-
-    // remove detection which were detected only on few frames
-    for (int i = 0; i < new_dets_num; ++i) {
-        if (new_dets[i].sort_class < dets_for_show) {
-            for (int j = 0; j < new_dets[i].classes; ++j) {
-                new_dets[i].prob[j] = 0;
+    for (int new_idx = 0; new_idx < new_dets_num; ++new_idx) {
+        if (new_dets[new_idx].track_id != 0) {
+            if (!add_new_detection_to_track(tracks, new_dets[new_idx])) {
+                std::cout << "something went wrong, bro\n"; // for debug
+                exit(1);
             }
         }
+        else {
+            create_new_track_or_del_detection(tracks, new_track_id, new_dets[new_idx], thresh);
+        }
     }
+
 }
